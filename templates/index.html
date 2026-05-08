@@ -1,19 +1,581 @@
+<!doctype html>
+<html lang="it">
 <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{{ title }}</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='main.css') }}">
-
+</head>
 <body>
-    <div class="App">
-        <header class="App-header">
-            <img src="{{ url_for('static', filename='Octocat.png') }}" class="App-logo" alt="logo" />
-            <p>
-                GitHub Codespaces <span class="heart">♥️</span> Flask
-            </p>
-            <p class="small">
-                Edit <code>templates/index.html</code> and refresh to see your changes!
-            </p>
-        </header>
-    </div>
-</body>
+    <main class="page">
+        <section class="hero">
+            <h1>Generatore di Stereogrammi</h1>
+            <p>Carica un modello 3D OBJ e un'immagine di sfondo, imposta scala e profondita e crea il tuo stereogramma JPG.</p>
+        </section>
 
+        {% with messages = get_flashed_messages() %}
+        {% if messages %}
+        <section class="alerts">
+            {% for message in messages %}
+            <p>{{ message }}</p>
+            {% endfor %}
+        </section>
+        {% endif %}
+        {% endwith %}
+
+        <form class="generator-form" action="{{ url_for('genera_stereogramma') }}" method="post" enctype="multipart/form-data">
+            <section class="panel">
+                <h2>Oggetto 3D (OBJ)</h2>
+                <label for="obj_existing">OBJ dalla cartella server</label>
+                <select id="obj_existing" name="obj_existing">
+                    <option value="">Nessuno (usa upload)</option>
+                    {% for filename in available_obj_files %}
+                    <option value="{{ filename }}">{{ filename }}</option>
+                    {% endfor %}
+                </select>
+
+                <label for="obj_file">File OBJ</label>
+                <input id="obj_file" name="obj_file" type="file" accept=".obj">
+
+                <label for="obj_scale">Ridimensionamento oggetto: <strong id="obj_scale_value">1.0x</strong></label>
+                <input id="obj_scale" name="obj_scale" type="range" min="0.2" max="8.0" step="0.1" value="1.0">
+
+                <label for="rot_x">Rotazione X: <strong id="rot_x_value">0°</strong></label>
+                <input id="rot_x" name="rot_x" type="range" min="-180" max="180" step="1" value="0">
+
+                <label for="rot_y">Rotazione Y: <strong id="rot_y_value">0°</strong></label>
+                <input id="rot_y" name="rot_y" type="range" min="-180" max="180" step="1" value="0">
+
+                <label for="rot_z">Rotazione Z: <strong id="rot_z_value">0°</strong></label>
+                <input id="rot_z" name="rot_z" type="range" min="-180" max="180" step="1" value="0">
+
+                <label for="trans_x">Posizione X: <strong id="trans_x_value">0%</strong></label>
+                <input id="trans_x" name="trans_x" type="range" min="-100" max="100" step="1" value="0">
+
+                <label for="trans_y">Posizione Y: <strong id="trans_y_value">0%</strong></label>
+                <input id="trans_y" name="trans_y" type="range" min="-100" max="100" step="1" value="0">
+
+                <div class="preview-box">
+                    <canvas id="obj_preview" width="640" height="420"></canvas>
+                </div>
+            </section>
+
+            <section class="panel">
+                <h2>Sfondo</h2>
+                <label for="bg_existing">Sfondo dalla cartella server</label>
+                <select id="bg_existing" name="bg_existing">
+                    <option value="">Nessuno (usa upload)</option>
+                    {% for filename in available_bg_files %}
+                    <option value="{{ filename }}">{{ filename }}</option>
+                    {% endfor %}
+                </select>
+
+                <label for="bg_file">Immagine di sfondo</label>
+                <input id="bg_file" name="bg_file" type="file" accept="image/*,.jfif">
+
+                <label for="bg_scale">Ridimensionamento sfondo: <strong id="bg_scale_value">1.0x</strong></label>
+                <input id="bg_scale" name="bg_scale" type="range" min="0.2" max="3.0" step="0.1" value="1.0">
+
+                <label for="bg_mode">Modalita sfondo</label>
+                <select id="bg_mode" name="bg_mode">
+                    <option value="full" selected>Pieno sfondo</option>
+                    <option value="tile">Affiancato (tile)</option>
+                </select>
+
+                <div class="preview-box bg-preview-wrap">
+                    <img id="bg_preview" alt="Anteprima sfondo" hidden>
+                    <p id="bg_placeholder">Nessuna immagine selezionata</p>
+                </div>
+            </section>
+
+            <section class="panel panel-full">
+                <h2>Profondita e Generazione</h2>
+                <label for="depth_level">Profondita: <strong id="depth_value">35</strong></label>
+                <input id="depth_level" name="depth_level" type="range" min="1" max="100" value="35">
+                <p class="hint">Significato: aumenta la disparita tra pattern sinistra/destra. Valori alti = rilievo 3D piu forte, ma anche piu difficile da fondere con gli occhi.</p>
+
+                <label for="output_size">Risoluzione output</label>
+                <select id="output_size" name="output_size">
+                    {% for key, value in output_sizes.items() %}
+                    <option value="{{ key }}">{{ key }} ({{ value[0] }} x {{ value[1] }})</option>
+                    {% endfor %}
+                </select>
+
+                <button type="submit">Genera stereogramma</button>
+                <p class="hint">Al click il server genera il file, lo salva nella cartella stereogrammi e avvia il download JPG.</p>
+            </section>
+        </form>
+
+        <section class="gallery panel-full">
+            <h2>Ultimi stereogrammi salvati</h2>
+            {% if gallery_items %}
+            <div class="gallery-grid">
+                {% for item in gallery_items %}
+                <article class="gallery-card">
+                    <a href="{{ item.url }}" target="_blank" rel="noopener noreferrer">
+                        <img src="{{ item.url }}" alt="{{ item.name }}" loading="lazy">
+                    </a>
+                    <div class="gallery-meta">
+                        <p>{{ item.name }}</p>
+                        <small>{{ item.modified }}</small>
+                    </div>
+                </article>
+                {% endfor %}
+            </div>
+            {% else %}
+            <p class="gallery-empty">Nessuno stereogramma salvato al momento.</p>
+            {% endif %}
+        </section>
+    </main>
+
+    <script>
+        const objInput = document.getElementById("obj_file");
+        const bgInput = document.getElementById("bg_file");
+        const objExisting = document.getElementById("obj_existing");
+        const bgExisting = document.getElementById("bg_existing");
+        const objScale = document.getElementById("obj_scale");
+        const rotX = document.getElementById("rot_x");
+        const rotY = document.getElementById("rot_y");
+        const rotZ = document.getElementById("rot_z");
+        const transX = document.getElementById("trans_x");
+        const transY = document.getElementById("trans_y");
+        const bgScale = document.getElementById("bg_scale");
+        const depthLevel = document.getElementById("depth_level");
+
+        const objScaleValue = document.getElementById("obj_scale_value");
+        const rotXValue = document.getElementById("rot_x_value");
+        const rotYValue = document.getElementById("rot_y_value");
+        const rotZValue = document.getElementById("rot_z_value");
+        const transXValue = document.getElementById("trans_x_value");
+        const transYValue = document.getElementById("trans_y_value");
+        const bgScaleValue = document.getElementById("bg_scale_value");
+        const depthValue = document.getElementById("depth_value");
+
+        const bgPreview = document.getElementById("bg_preview");
+        const bgPlaceholder = document.getElementById("bg_placeholder");
+        const bgModeSelect = document.getElementById("bg_mode");
+
+        const canvas = document.getElementById("obj_preview");
+        const ctx = canvas.getContext("2d");
+        const MAX_PREVIEW_FACES = 4500;
+        const MAX_PREVIEW_EDGES = 18000;
+        const PREVIEW_FPS = 18;
+        let modelData = null;
+        let lastFrameTime = 0;
+        let pointerDragging = false;
+        let lastPointerX = 0;
+        let lastPointerY = 0;
+
+        function edgeKey(a, b) {
+            return a < b ? `${a}_${b}` : `${b}_${a}`;
+        }
+
+        function showObjMessage(message) {
+            const width = canvas.clientWidth || canvas.width;
+            const height = canvas.clientHeight || canvas.height;
+            canvas.width = width;
+            canvas.height = height;
+            ctx.clearRect(0, 0, width, height);
+            ctx.fillStyle = "#f0f6ff";
+            ctx.fillRect(0, 0, width, height);
+            ctx.fillStyle = "#3e556d";
+            ctx.font = "600 14px Space Grotesk, sans-serif";
+            ctx.textAlign = "center";
+            ctx.fillText(message, width / 2, height / 2);
+        }
+
+        function parseObj(raw) {
+            const vertices = [];
+            const faces = [];
+            const lines = raw.split(/\r?\n/);
+
+            for (const lineRaw of lines) {
+                const line = lineRaw.trim();
+                if (!line || line.startsWith("#")) {
+                    continue;
+                }
+
+                const parts = line.split(/\s+/);
+                if (parts[0] === "v" && parts.length >= 4) {
+                    const x = Number(parts[1]);
+                    const y = Number(parts[2]);
+                    const z = Number(parts[3]);
+                    if (Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(z)) {
+                        vertices.push([x, y, z]);
+                    }
+                }
+
+                if (parts[0] === "f" && parts.length >= 4) {
+                    const face = [];
+                    for (const token of parts.slice(1)) {
+                        const indexText = token.split("/")[0];
+                        const idx = Number(indexText);
+                        if (!Number.isInteger(idx)) {
+                            continue;
+                        }
+                        const zeroIndex = idx > 0 ? idx - 1 : vertices.length + idx;
+                        if (zeroIndex >= 0 && zeroIndex < vertices.length) {
+                            face.push(zeroIndex);
+                        }
+                    }
+                    if (face.length >= 3) {
+                        faces.push(face);
+                    }
+                }
+            }
+
+            if (!vertices.length || !faces.length) {
+                return null;
+            }
+
+            let minX = Infinity;
+            let minY = Infinity;
+            let minZ = Infinity;
+            let maxX = -Infinity;
+            let maxY = -Infinity;
+            let maxZ = -Infinity;
+
+            for (const [x, y, z] of vertices) {
+                minX = Math.min(minX, x);
+                minY = Math.min(minY, y);
+                minZ = Math.min(minZ, z);
+                maxX = Math.max(maxX, x);
+                maxY = Math.max(maxY, y);
+                maxZ = Math.max(maxZ, z);
+            }
+
+            const cx = (minX + maxX) / 2;
+            const cy = (minY + maxY) / 2;
+            const cz = (minZ + maxZ) / 2;
+            const spanX = maxX - minX;
+            const spanY = maxY - minY;
+            const spanZ = maxZ - minZ;
+            const maxSpan = Math.max(spanX, spanY, spanZ, 1e-6);
+
+            const normalized = vertices.map(([x, y, z]) => [
+                (x - cx) / maxSpan,
+                (y - cy) / maxSpan,
+                (z - cz) / maxSpan,
+            ]);
+
+            const stride = Math.max(1, Math.ceil(faces.length / MAX_PREVIEW_FACES));
+            const sampledFaces = [];
+            for (let i = 0; i < faces.length; i += stride) {
+                sampledFaces.push(faces[i]);
+            }
+
+            const edgeSet = new Set();
+            const edges = [];
+            for (const face of sampledFaces) {
+                for (let i = 0; i < face.length; i += 1) {
+                    const a = face[i];
+                    const b = face[(i + 1) % face.length];
+                    const key = edgeKey(a, b);
+                    if (!edgeSet.has(key)) {
+                        edgeSet.add(key);
+                        edges.push([a, b]);
+                        if (edges.length >= MAX_PREVIEW_EDGES) {
+                            break;
+                        }
+                    }
+                }
+                if (edges.length >= MAX_PREVIEW_EDGES) {
+                    break;
+                }
+            }
+
+            return {
+                vertices: normalized,
+                edges,
+                totalFaces: faces.length,
+                sampledFaces: sampledFaces.length,
+            };
+        }
+
+        function project([x, y, z], angleY, angleX, angleZ, scale, width, height, centerX, centerY) {
+            const cy = Math.cos(angleY);
+            const sy = Math.sin(angleY);
+            const cx = Math.cos(angleX);
+            const sx = Math.sin(angleX);
+            const cz = Math.cos(angleZ);
+            const sz = Math.sin(angleZ);
+
+            const x1 = x * cy - z * sy;
+            const z1 = x * sy + z * cy;
+            const y2 = y * cx - z1 * sx;
+            const z2 = y * sx + z1 * cx;
+            const x3 = x1 * cz - y2 * sz;
+            const y3 = x1 * sz + y2 * cz;
+
+            const perspective = 1 / (2.2 - z2);
+            const px = centerX + x3 * scale * perspective;
+            const py = centerY - y3 * scale * perspective;
+            return [px, py];
+        }
+
+        function drawObjPreview() {
+            const width = canvas.clientWidth || canvas.width;
+            const height = canvas.clientHeight || canvas.height;
+            canvas.width = width;
+            canvas.height = height;
+
+            ctx.clearRect(0, 0, width, height);
+            ctx.fillStyle = "#ecf4ff";
+            ctx.fillRect(0, 0, width, height);
+
+            if (!modelData) {
+                showObjMessage("Nessun file OBJ selezionato");
+                return;
+            }
+
+            const scale = Number(objScale.value);
+            const angleX = (Number(rotX.value) * Math.PI) / 180;
+            const angleY = (Number(rotY.value) * Math.PI) / 180;
+            const angleZ = (Number(rotZ.value) * Math.PI) / 180;
+            const centerX = width / 2 + (Number(transX.value) / 100) * width * 0.45;
+            const centerY = height / 2 - (Number(transY.value) / 100) * height * 0.45;
+            const drawScale = Math.min(width, height) * 1.9 * scale;
+            const points = modelData.vertices.map((v) => project(v, angleY, angleX, angleZ, drawScale, width, height, centerX, centerY));
+
+            ctx.strokeStyle = "#2b5f94";
+            ctx.lineWidth = 1.1;
+            ctx.beginPath();
+
+            for (const edge of modelData.edges) {
+                const a = points[edge[0]];
+                const b = points[edge[1]];
+                if (!a || !b) {
+                    continue;
+                }
+                ctx.moveTo(a[0], a[1]);
+                ctx.lineTo(b[0], b[1]);
+            }
+
+            ctx.stroke();
+
+            ctx.fillStyle = "rgba(13, 32, 51, 0.86)";
+            ctx.font = "600 12px Space Grotesk, sans-serif";
+            ctx.textAlign = "left";
+            ctx.fillText(
+                `Preview ottimizzata: facce ${modelData.sampledFaces}/${modelData.totalFaces} | spigoli ${modelData.edges.length}`,
+                12,
+                22
+            );
+        }
+
+        function tick(now) {
+            if (now - lastFrameTime < 1000 / PREVIEW_FPS) {
+                requestAnimationFrame(tick);
+                return;
+            }
+            lastFrameTime = now;
+
+            drawObjPreview();
+            requestAnimationFrame(tick);
+        }
+
+        objScale.addEventListener("input", () => {
+            objScaleValue.textContent = `${Number(objScale.value).toFixed(1)}x`;
+            drawObjPreview();
+        });
+
+        function updateRotationLabels() {
+            rotXValue.textContent = `${Math.round(Number(rotX.value))}°`;
+            rotYValue.textContent = `${Math.round(Number(rotY.value))}°`;
+            rotZValue.textContent = `${Math.round(Number(rotZ.value))}°`;
+            transXValue.textContent = `${Math.round(Number(transX.value))}%`;
+            transYValue.textContent = `${Math.round(Number(transY.value))}%`;
+        }
+
+        rotX.addEventListener("input", () => {
+            updateRotationLabels();
+            drawObjPreview();
+        });
+        rotY.addEventListener("input", () => {
+            updateRotationLabels();
+            drawObjPreview();
+        });
+        rotZ.addEventListener("input", () => {
+            updateRotationLabels();
+            drawObjPreview();
+        });
+        transX.addEventListener("input", () => {
+            updateRotationLabels();
+            drawObjPreview();
+        });
+        transY.addEventListener("input", () => {
+            updateRotationLabels();
+            drawObjPreview();
+        });
+
+        bgScale.addEventListener("input", () => {
+            bgScaleValue.textContent = `${Number(bgScale.value).toFixed(1)}x`;
+            updateBackgroundPreview();
+        });
+
+        depthLevel.addEventListener("input", () => {
+            depthValue.textContent = depthLevel.value;
+        });
+
+        bgModeSelect.addEventListener("change", updateBackgroundPreview);
+
+        function updateBackgroundPreview() {
+            if (!bgPreview.src) {
+                return;
+            }
+            const scale = Number(bgScale.value);
+            if (bgModeSelect.value === "tile") {
+                bgPreview.hidden = true;
+                bgPreview.style.objectFit = "none";
+                bgPreview.style.objectPosition = "top left";
+                bgPreview.style.width = `${100 / scale}%`;
+                bgPreview.style.height = `${100 / scale}%`;
+                bgPreview.style.transform = "none";
+                bgPreview.parentElement.style.backgroundSize = `${100 / scale}%`;
+                bgPreview.parentElement.style.backgroundImage = `url('${bgPreview.src}')`;
+                bgPreview.parentElement.style.backgroundRepeat = "repeat";
+            } else {
+                bgPreview.hidden = false;
+                bgPreview.parentElement.style.backgroundImage = "none";
+                bgPreview.parentElement.style.backgroundRepeat = "no-repeat";
+                bgPreview.style.objectFit = "cover";
+                bgPreview.style.width = "100%";
+                bgPreview.style.height = "100%";
+                bgPreview.style.transform = `scale(${scale})`;
+                bgPreview.style.transformOrigin = "center";
+            }
+        }
+
+        bgInput.addEventListener("change", () => {
+            if (bgInput.files && bgInput.files[0]) {
+                bgExisting.value = "";
+            }
+
+            const file = bgInput.files && bgInput.files[0];
+            if (!file) {
+                bgPreview.hidden = true;
+                bgPlaceholder.hidden = false;
+                return;
+            }
+
+            const reader = new FileReader();
+            reader.onload = () => {
+                bgPreview.src = reader.result;
+                bgPreview.hidden = false;
+                bgPlaceholder.hidden = true;
+                updateBackgroundPreview();
+            };
+            reader.readAsDataURL(file);
+        });
+
+        bgExisting.addEventListener("change", () => {
+            const filename = bgExisting.value;
+            if (!filename) {
+                return;
+            }
+
+            bgInput.value = "";
+            bgPreview.src = `/background/${encodeURIComponent(filename)}`;
+            bgPreview.hidden = false;
+            bgPlaceholder.hidden = true;
+            updateBackgroundPreview();
+        });
+
+        objInput.addEventListener("change", () => {
+            if (objInput.files && objInput.files[0]) {
+                objExisting.value = "";
+            }
+
+            const file = objInput.files && objInput.files[0];
+            if (!file) {
+                modelData = null;
+                drawObjPreview();
+                return;
+            }
+
+            const reader = new FileReader();
+            reader.onload = () => {
+                try {
+                    modelData = parseObj(String(reader.result || ""));
+                    if (!modelData) {
+                        showObjMessage("OBJ non valido o senza geometria");
+                        return;
+                    }
+                    drawObjPreview();
+                } catch (error) {
+                    console.error("Errore anteprima OBJ:", error);
+                    showObjMessage("Errore caricamento anteprima OBJ");
+                }
+            };
+            reader.readAsText(file);
+        });
+
+        objExisting.addEventListener("change", async () => {
+            const filename = objExisting.value;
+            if (!filename) {
+                return;
+            }
+
+            objInput.value = "";
+
+            try {
+                const response = await fetch(`/obj/${encodeURIComponent(filename)}`);
+                if (!response.ok) {
+                    throw new Error("Errore fetch OBJ server");
+                }
+                const text = await response.text();
+                modelData = parseObj(text);
+                if (!modelData) {
+                    showObjMessage("OBJ server non valido o senza geometria");
+                    return;
+                }
+                drawObjPreview();
+            } catch (error) {
+                console.error("Errore anteprima OBJ server:", error);
+                showObjMessage("Errore caricamento OBJ da server");
+            }
+        });
+
+        canvas.addEventListener("pointerdown", (event) => {
+            pointerDragging = true;
+            lastPointerX = event.clientX;
+            lastPointerY = event.clientY;
+            canvas.setPointerCapture(event.pointerId);
+        });
+
+        canvas.addEventListener("pointermove", (event) => {
+            if (!pointerDragging) {
+                return;
+            }
+
+            const dx = event.clientX - lastPointerX;
+            const dy = event.clientY - lastPointerY;
+
+            lastPointerX = event.clientX;
+            lastPointerY = event.clientY;
+
+            const nextY = Math.max(-180, Math.min(180, Number(rotY.value) + dx * 0.45));
+            const nextX = Math.max(-180, Math.min(180, Number(rotX.value) + dy * 0.45));
+            rotY.value = String(nextY);
+            rotX.value = String(nextX);
+            updateRotationLabels();
+            drawObjPreview();
+        });
+
+        canvas.addEventListener("pointerup", (event) => {
+            pointerDragging = false;
+            canvas.releasePointerCapture(event.pointerId);
+        });
+
+        canvas.addEventListener("pointerleave", () => {
+            pointerDragging = false;
+        });
+
+        window.addEventListener("resize", drawObjPreview);
+
+        updateRotationLabels();
+        showObjMessage("Nessun file OBJ selezionato");
+        tick();
+    </script>
+</body>
 </html>
